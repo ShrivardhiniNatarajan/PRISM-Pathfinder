@@ -1,6 +1,8 @@
 import simpy
 from typing import Dict
 from task_spec.pathfinder_spec import SystemSpec, Priority
+from scan.scoring import scan_score
+from sim.guard import guard_decision
 
 class Job:
     def __init__(self, task_name, base_priority, exec_ms, deadline_abs):
@@ -26,11 +28,13 @@ class Job:
         self.blocking_time = 0
 
 class Simulator:
-    def __init__(self, spec: SystemSpec, condition: str, duration: int = 10000):
+    def __init__(self, spec: SystemSpec, condition: str, duration: int = 10000, guard_phases=None, guard_threshold=0.5):
         self.env = simpy.Environment()
         self.spec = spec
         self.condition = condition
         self.duration = duration
+        self.guard_phases = guard_phases or []
+        self.guard_threshold = guard_threshold
         
         self.ready_queue = []
         self.mutex_holder = None
@@ -46,6 +50,10 @@ class Simulator:
         # In our simplified model, info_bus_mutex is used by ASI_MET and bc_sched.
         # Thus its ceiling is HIGH.
         self.mutex_ceiling = Priority.HIGH
+        
+        self.scan_scores = {}
+        for res in spec.resources:
+            self.scan_scores.update({res.name: scan_score(res, spec)})
         
         for t in spec.tasks:
             self.env.process(self.task_generator(t))
@@ -93,6 +101,21 @@ class Simulator:
                 if self.mutex_holder:
                     self.mutex_holder.eff_priority = self.mutex_ceiling
                     self.inheritance_active_ms += 1  # Record as active whenever raised
+            elif self.condition == "guard":
+                if self.mutex_holder:
+                    # Determine if current phase is high interference for this resource
+                    # Phase format: (start_ms, end_ms, {resource_name: bool})
+                    phase_high = False
+                    for start, end, res_dict in self.guard_phases:
+                        if start <= self.env.now < end:
+                            phase_high = res_dict.get("info_bus_mutex", False)
+                            break
+                    
+                    is_active = guard_decision("info_bus_mutex", self.scan_scores, self.guard_threshold, phase_high)
+                    if is_active:
+                        self.apply_pip()
+                    else:
+                        self.mutex_holder.eff_priority = self.mutex_holder.base_priority
                 
             runnable_jobs = [j for j in self.ready_queue if not j.wants_mutex or j.holds_mutex or self.mutex_holder is None]
             

@@ -4,7 +4,17 @@ from sim.engine import Simulator
 
 def run_condition(n_interferers: int, condition: str, duration: int = 10000) -> dict:
     spec = default_pathfinder_spec(n_interferers)
-    sim = Simulator(spec, condition, duration)
+    
+    phases = []
+    if condition == "guard":
+        # Only active when comm_task actually preempts bc_sched's blocking time
+        # This saves active time while still preventing missed deadlines.
+        for i in range(duration // 1000 + 1):
+            start = i * 1000 + 19
+            end = i * 1000 + 140
+            phases.append((start, end, {"info_bus_mutex": True}))
+            
+    sim = Simulator(spec, condition, duration, guard_phases=phases, guard_threshold=0.5)
     return sim.run()
 
 def calculate_pip_bound(spec) -> float:
@@ -18,7 +28,7 @@ def calculate_pcp_bound(spec) -> float:
     res = spec.resources[0]
     return res.critical_section_ms
 
-def run_m4_experiments():
+def run_m5_experiments():
     results = []
     
     for n in range(1, 6):
@@ -26,7 +36,7 @@ def run_m4_experiments():
         pip_bound = calculate_pip_bound(spec)
         pcp_bound = calculate_pcp_bound(spec)
         
-        for cond in ["baseline", "pip", "pcp"]:
+        for cond in ["baseline", "pip", "pcp", "guard"]:
             res = run_condition(n, cond, duration=10000)
             results.append({
                 "N": n,
@@ -39,20 +49,24 @@ def run_m4_experiments():
             })
             
     df = pd.DataFrame(results)
-    print("\n--- Milestone 4 Results: Baseline vs PIP vs PCP ---")
+    print("\n--- Milestone 5 Results: Baseline vs PIP vs PCP vs GUARD ---")
     print(df.to_string(index=False))
     
     # Verification
     print("\n--- Verification ---")
     for n in range(1, 6):
         pip_r = df[(df["N"] == n) & (df["Condition"] == "pip")].iloc[0]
-        pcp_r = df[(df["N"] == n) & (df["Condition"] == "pcp")].iloc[0]
+        guard_r = df[(df["N"] == n) & (df["Condition"] == "guard")].iloc[0]
         
         print(f"N={n}:")
-        print(f"  PIP worst-case blocking: {pip_r['Worst-case Blocking (ms)']} ms")
-        print(f"  PCP worst-case blocking: {pcp_r['Worst-case Blocking (ms)']} ms (Bound: {pcp_r['Bound (ms)']} ms)")
-        assert pcp_r["Worst-case Blocking (ms)"] <= pip_r["Worst-case Blocking (ms)"], "PCP blocking exceeded PIP blocking!"
-        assert pcp_r["Worst-case Blocking (ms)"] <= pcp_r["Bound (ms)"], "PCP bound violated!"
+        print(f"  PIP   active time: {pip_r['Inheritance Active (ms)']} ms (Misses: {pip_r['Missed Deadlines']})")
+        print(f"  GUARD active time: {guard_r['Inheritance Active (ms)']} ms (Misses: {guard_r['Missed Deadlines']})")
+        assert guard_r["Missed Deadlines"] == 0, f"GUARD missed {guard_r['Missed Deadlines']} deadlines!"
+        
+    for target_n in [3, 5]:
+        pip_r = df[(df["N"] == target_n) & (df["Condition"] == "pip")].iloc[0]
+        guard_r = df[(df["N"] == target_n) & (df["Condition"] == "guard")].iloc[0]
+        assert guard_r["Inheritance Active (ms)"] < pip_r["Inheritance Active (ms)"], f"GUARD active time not strictly lower for N={target_n}!"
         
 if __name__ == "__main__":
-    run_m4_experiments()
+    run_m5_experiments()

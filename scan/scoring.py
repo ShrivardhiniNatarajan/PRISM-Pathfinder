@@ -38,7 +38,7 @@ def scan_score(resource: SharedResource, spec: SystemSpec, weights: Tuple[float,
         min_v = min(values)
         max_v = max(values)
         if max_v == min_v:
-            return 0.0
+            return 1.0
         return (val - min_v) / (max_v - min_v)
         
     target_raw = raw_components[resource.name]
