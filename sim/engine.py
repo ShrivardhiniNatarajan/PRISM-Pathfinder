@@ -42,13 +42,17 @@ class Simulator:
         self.bc_jobs_blocked = 0
         self.inheritance_active_ms = 0
         
+        # Calculate PCP Ceiling
+        # In our simplified model, info_bus_mutex is used by ASI_MET and bc_sched.
+        # Thus its ceiling is HIGH.
+        self.mutex_ceiling = Priority.HIGH
+        
         for t in spec.tasks:
             self.env.process(self.task_generator(t))
             
         self.env.process(self.tick_scheduler())
         
     def task_generator(self, task):
-        # Force phase alignment to reliably trigger priority inversion
         if task.name == "ASI_MET":
             offset = 0
         elif task.name == "bc_sched":
@@ -85,11 +89,17 @@ class Simulator:
                     self.mutex_holder.eff_priority = self.mutex_holder.base_priority
             elif self.condition == "pip":
                 self.apply_pip()
+            elif self.condition == "pcp":
+                if self.mutex_holder:
+                    self.mutex_holder.eff_priority = self.mutex_ceiling
+                    self.inheritance_active_ms += 1  # Record as active whenever raised
                 
             runnable_jobs = [j for j in self.ready_queue if not j.wants_mutex or j.holds_mutex or self.mutex_holder is None]
             
             for j in self.ready_queue:
                 if j.wants_mutex and not j.holds_mutex and self.mutex_holder is not None and self.mutex_holder != j:
+                    # PCP access check: a task can only enter if priority > system ceiling
+                    # But if it's the SAME mutex, it simply blocks anyway because it's held!
                     if j.started_waiting_mutex is None:
                         j.started_waiting_mutex = self.env.now
                         if j not in self.mutex_waiters:
